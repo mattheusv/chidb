@@ -1,2 +1,2 @@
 # chidb
-chidb database writen in Rust
+[chidb](http://chi.cs.uchicago.edu/chidb/index.html) database implementation using Rust
