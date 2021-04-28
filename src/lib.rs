@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use bytes::{BufMut, BytesMut};
 use std::fs::File;
 use std::io::{
     self,
@@ -7,9 +8,11 @@ use std::io::{
 };
 use std::mem::size_of;
 use std::path::Path;
-use std::str;
 
-pub enum BTreeError {
+pub mod pager;
+
+#[derive(PartialEq)]
+pub enum ChiError {
     /// Database file contains an invalid header
     Ecorruptheader,
 
@@ -17,15 +20,29 @@ pub enum BTreeError {
     Enomem,
 
     /// An I/O error
-    IO(io::Error),
+    IO(io::ErrorKind),
 }
 
-impl From<io::Error> for BTreeError {
-    fn from(err: io::Error) -> Self {
-        Self::IO(err)
+impl std::fmt::Debug for ChiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChiError::Ecorruptheader => write!(f, "invalid database header"),
+            ChiError::Enomem => write!(f, "could not allocate memory"),
+            ChiError::IO(err) => write!(f, "{:?}", err),
+        }
     }
 }
 
+impl From<io::Error> for ChiError {
+    fn from(err: io::Error) -> Self {
+        Self::IO(err.kind())
+    }
+}
+
+/// The BTree struct represent a "B-Tree file". It contains a pointer to the
+/// chidb database it is a part of, and a pointer to a Pager, which it will
+/// use to access pages on the file
+#[derive(Debug)]
 pub struct BTree {
     buffer: File,
 }
@@ -42,7 +59,7 @@ impl BTree {
     ///
     /// Parameters
     /// - filename: Database file (might not exist)
-    pub fn open(filename: &str) -> Result<Self, BTreeError> {
+    pub fn open(filename: &Path) -> Result<Self, ChiError> {
         let path = Path::new(filename);
         if path.exists() {
             Self::load_from_file(path)
@@ -51,45 +68,60 @@ impl BTree {
         }
     }
 
-    fn create(filename: &Path) -> Result<Self, BTreeError> {
+    fn create(filename: &Path) -> Result<Self, ChiError> {
         let file = File::create(filename)?;
-        let btree = BTree { buffer: file };
+        let mut btree = BTree { buffer: file };
+        let header = BTreeHeader::default();
+
+        let bytes_writen = btree.write_buffer(&header.to_bytes()?)?;
+        assert_eq!(bytes_writen, HEADER_SIZE);
+
         Ok(btree)
     }
 
-    fn load_from_file(filename: &Path) -> Result<Self, BTreeError> {
+    fn load_from_file(filename: &Path) -> Result<Self, ChiError> {
         let file = File::open(filename)?;
         let mut btree = BTree { buffer: file };
 
         if !btree.validate_header()? {
-            Err(BTreeError::Ecorruptheader)
+            Err(ChiError::Ecorruptheader)
         } else {
             Ok(btree)
         }
     }
 
     fn validate_header(&mut self) -> io::Result<bool> {
-        let header = self.header()?;
-        let magic_bytes = str::from_utf8(&header.magic_bytes).unwrap_or("");
-        Ok(magic_bytes == MAGIC_BYTES)
+        let header = self.load_header()?;
+        Ok(MAGIC_BYTES.clone() == header.magic_bytes)
     }
 
-    fn header(&mut self) -> io::Result<BTreeHeader> {
+    fn load_header(&mut self) -> io::Result<BTreeHeader> {
         self.buffer.seek(SeekFrom::Start(0))?;
         let mut header = [0; HEADER_SIZE];
         self.buffer.read(&mut header)?;
         BTreeHeader::from_bytes(&header)
     }
+
+    fn write_buffer(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let mut bytes_writen = 0;
+
+        while bytes_writen < bytes.len() {
+            let writen = self.buffer.write(&bytes[bytes_writen..])?;
+            bytes_writen += writen;
+        }
+
+        Ok(bytes_writen)
+    }
 }
 
-const MAGIC_BYTES: &str = "SQLite format 3";
-const MAGIB_BYTES_SIZE: usize = MAGIC_BYTES.len();
+const MAGIC_BYTES_SIZE: usize = 15;
+const MAGIC_BYTES: &[u8; MAGIC_BYTES_SIZE] = b"SQLite format 3";
 const HEADER_SIZE: usize = 100;
 const PAGE_CACHE_SIZE_INITIAL: usize = 20000;
 
 struct BTreeHeader {
     /// Magic bytes of binary file
-    magic_bytes: [u8; MAGIB_BYTES_SIZE],
+    magic_bytes: [u8; MAGIC_BYTES_SIZE],
 
     /// Size of database page
     page_size: u16,
@@ -108,10 +140,30 @@ struct BTreeHeader {
 }
 
 impl BTreeHeader {
+    fn to_bytes(&self) -> io::Result<[u8; HEADER_SIZE]> {
+        let bytes = BytesMut::with_capacity(HEADER_SIZE);
+        let mut buffer = BufWriter::with_capacity(HEADER_SIZE, bytes.writer());
+
+        let mut bytes_writen = buffer.write(&self.magic_bytes)?;
+        bytes_writen += buffer.write(&self.page_size.to_le_bytes())?;
+        bytes_writen += buffer.write(&self.file_change_counter.to_le_bytes())?;
+        bytes_writen += buffer.write(&self.schema_version.to_le_bytes())?;
+        bytes_writen += buffer.write(&self.page_cache_size.to_le_bytes())?;
+        bytes_writen += buffer.write(&self.user_cookie.to_le_bytes())?;
+
+        let empty_space = vec![0; HEADER_SIZE - bytes_writen];
+        buffer.write(&empty_space)?;
+
+        let mut raw = [0; HEADER_SIZE];
+        raw.copy_from_slice(buffer.buffer());
+
+        Ok(raw)
+    }
+
     fn from_bytes(bytes: &[u8; HEADER_SIZE]) -> io::Result<BTreeHeader> {
         let mut buffer = BufReader::new(&bytes[..]);
 
-        let mut magic_bytes = [0; MAGIB_BYTES_SIZE];
+        let mut magic_bytes = [0; MAGIC_BYTES_SIZE];
         let mut page_size = [0; size_of::<u16>()];
         let mut file_change_counter = [0; size_of::<u32>()];
         let mut schema_version = [0; size_of::<u32>()];
@@ -133,5 +185,61 @@ impl BTreeHeader {
             page_cache_size: u32::from_le_bytes(page_cache_size),
             user_cookie: u32::from_le_bytes(user_cookie),
         })
+    }
+}
+
+const PAGE_SIZE: usize = 100;
+
+impl Default for BTreeHeader {
+    fn default() -> Self {
+        BTreeHeader {
+            magic_bytes: MAGIC_BYTES.clone(),
+            page_size: PAGE_SIZE as u16,
+            file_change_counter: 0,
+            schema_version: 0,
+            page_cache_size: PAGE_CACHE_SIZE_INITIAL as u32,
+            user_cookie: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::{NamedTempFile, TempDir};
+
+    #[test]
+    fn test_create_empty_btree() -> Result<(), ChiError> {
+        let temp_dir = TempDir::new()?;
+        let file = temp_dir.into_path().join("test_create_empty_btree");
+
+        let _ = BTree::open(&file)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_open_valid_btree() -> Result<(), ChiError> {
+        let temp_dir = TempDir::new()?;
+        let file = temp_dir.into_path().join("test_open_valid_btree");
+
+        // Assert create empty btree
+        let _ = BTree::open(&file)?;
+
+        // Assert open existed btree
+        let _ = BTree::open(&file)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_open_invalid_btree() -> Result<(), ChiError> {
+        let file = NamedTempFile::new()?;
+
+        let result = BTree::open(&file.path());
+
+        assert_eq!(result.err(), Some(ChiError::Ecorruptheader));
+
+        Ok(())
     }
 }
