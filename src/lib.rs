@@ -1,18 +1,22 @@
 #![allow(dead_code)]
 use bytes::{BufMut, BytesMut};
-use std::fs::File;
 use std::io::{
     self,
-    prelude::{Read, Seek, Write},
-    BufReader, BufWriter, SeekFrom,
+    prelude::{Read, Write},
+    BufReader, BufWriter,
 };
 use std::mem::size_of;
 use std::path::Path;
 
 pub mod pager;
 
+use pager::{Pager, HEADER_SIZE, PAGE_SIZE};
+
 #[derive(PartialEq)]
 pub enum ChiError {
+    /// The file does not have a header
+    NoHeader,
+
     /// Database file contains an invalid header
     Ecorruptheader,
 
@@ -26,6 +30,7 @@ pub enum ChiError {
 impl std::fmt::Debug for ChiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ChiError::NoHeader => write!(f, "file does not have a header"),
             ChiError::Ecorruptheader => write!(f, "invalid database header"),
             ChiError::Enomem => write!(f, "could not allocate memory"),
             ChiError::IO(err) => write!(f, "{:?}", err),
@@ -44,7 +49,7 @@ impl From<io::Error> for ChiError {
 /// use to access pages on the file
 #[derive(Debug)]
 pub struct BTree {
-    buffer: File,
+    pager: Pager,
 }
 
 impl BTree {
@@ -60,63 +65,43 @@ impl BTree {
     /// Parameters
     /// - filename: Database file (might not exist)
     pub fn open(filename: &Path) -> Result<Self, ChiError> {
-        let path = Path::new(filename);
-        if path.exists() {
-            Self::load_from_file(path)
+        let pager = Pager::open(filename)?;
+
+        if pager.is_empty()? {
+            let mut btree = BTree { pager };
+            btree.initialize_header()?;
+            Ok(btree)
         } else {
-            Self::create(path)
-        }
-    }
-
-    fn create(filename: &Path) -> Result<Self, ChiError> {
-        let file = File::create(filename)?;
-        let mut btree = BTree { buffer: file };
-        let header = BTreeHeader::default();
-
-        let bytes_writen = btree.write_buffer(&header.to_bytes()?)?;
-        assert_eq!(bytes_writen, HEADER_SIZE);
-
-        Ok(btree)
-    }
-
-    fn load_from_file(filename: &Path) -> Result<Self, ChiError> {
-        let file = File::open(filename)?;
-        let mut btree = BTree { buffer: file };
-
-        if !btree.validate_header()? {
-            Err(ChiError::Ecorruptheader)
-        } else {
+            let mut btree = BTree { pager };
+            btree.validate_header()?;
             Ok(btree)
         }
     }
 
-    fn validate_header(&mut self) -> io::Result<bool> {
-        let header = self.load_header()?;
-        Ok(MAGIC_BYTES.clone() == header.magic_bytes)
-    }
-
-    fn load_header(&mut self) -> io::Result<BTreeHeader> {
-        self.buffer.seek(SeekFrom::Start(0))?;
-        let mut header = [0; HEADER_SIZE];
-        self.buffer.read(&mut header)?;
-        BTreeHeader::from_bytes(&header)
-    }
-
-    fn write_buffer(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let mut bytes_writen = 0;
-
-        while bytes_writen < bytes.len() {
-            let writen = self.buffer.write(&bytes[bytes_writen..])?;
-            bytes_writen += writen;
+    fn validate_header(&mut self) -> Result<(), ChiError> {
+        let header = self.read_header()?;
+        if MAGIC_BYTES.clone() != header.magic_bytes {
+            Err(ChiError::Ecorruptheader)
+        } else {
+            Ok(())
         }
+    }
 
-        Ok(bytes_writen)
+    fn initialize_header(&mut self) -> Result<(), ChiError> {
+        let header = BTreeHeader::default();
+        self.pager.write_buffer(&header.to_bytes()?)?;
+        Ok(())
+    }
+
+    fn read_header(&mut self) -> Result<BTreeHeader, ChiError> {
+        let header_bytes = self.pager.read_header()?;
+        let header = BTreeHeader::from_bytes(&header_bytes)?;
+        Ok(header)
     }
 }
 
 const MAGIC_BYTES_SIZE: usize = 15;
 const MAGIC_BYTES: &[u8; MAGIC_BYTES_SIZE] = b"SQLite format 3";
-const HEADER_SIZE: usize = 100;
 const PAGE_CACHE_SIZE_INITIAL: usize = 20000;
 
 struct BTreeHeader {
@@ -188,8 +173,6 @@ impl BTreeHeader {
     }
 }
 
-const PAGE_SIZE: usize = 100;
-
 impl Default for BTreeHeader {
     fn default() -> Self {
         BTreeHeader {
@@ -234,10 +217,11 @@ mod tests {
 
     #[test]
     fn test_open_invalid_btree() -> Result<(), ChiError> {
-        let file = NamedTempFile::new()?;
+        let invalid_header = [0; pager::HEADER_SIZE];
+        let mut file = NamedTempFile::new()?;
+        file.write(&invalid_header)?;
 
         let result = BTree::open(&file.path());
-
         assert_eq!(result.err(), Some(ChiError::Ecorruptheader));
 
         Ok(())
