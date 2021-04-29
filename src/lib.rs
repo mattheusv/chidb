@@ -14,6 +14,9 @@ use pager::{Pager, HEADER_SIZE, PAGE_SIZE};
 
 #[derive(PartialEq)]
 pub enum ChiError {
+    /// The page has an incorrect page number
+    EPageNo,
+
     /// The file does not have a header
     NoHeader,
 
@@ -30,6 +33,7 @@ pub enum ChiError {
 impl std::fmt::Debug for ChiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ChiError::EPageNo => write!(f, "page has an incorrect page number"),
             ChiError::NoHeader => write!(f, "file does not have a header"),
             ChiError::Ecorruptheader => write!(f, "invalid database header"),
             ChiError::Enomem => write!(f, "could not allocate memory"),
@@ -89,7 +93,23 @@ impl BTree {
 
     fn initialize_header(&mut self) -> Result<(), ChiError> {
         let header = BTreeHeader::default();
-        self.pager.write_buffer(&header.to_bytes()?)?;
+
+        let n_page = self.pager.allocate_page();
+        let mut page = self.pager.read_page(n_page)?;
+
+        let mut bytes = BytesMut::with_capacity(page.data.len());
+        bytes.extend_from_slice(&page.data);
+
+        let raw = &mut bytes[0..HEADER_SIZE];
+        raw.copy_from_slice(&header.to_bytes()?);
+
+        // TODO: avoid a lot of copies
+        let mut new_data = [0; PAGE_SIZE];
+        new_data.copy_from_slice(&bytes[..]);
+        page.data = new_data;
+
+        self.pager.write_page(&page)?;
+
         Ok(())
     }
 
