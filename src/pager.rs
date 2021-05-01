@@ -1,3 +1,4 @@
+use bytes::BytesMut;
 use std::fs::{File, OpenOptions};
 use std::io::{
     self,
@@ -13,13 +14,41 @@ pub const HEADER_SIZE: usize = 100;
 
 /// Represents a in-memory copy of page
 pub struct MemPage {
+    /// Number of physical page
     pub n_page: u32,
-    pub data: [u8; PAGE_SIZE],
+
+    /// Offset where to start to read from data
+    pub offset: u16,
+
+    /// Page bytes data
+    data: BytesMut,
 }
 
 impl MemPage {
-    pub fn new(n_page: u32, data: [u8; PAGE_SIZE]) -> Self {
-        MemPage { n_page, data }
+    /// Create a new MemPage
+    pub fn new(n_page: u32, raw: [u8; PAGE_SIZE], offset: u16) -> Self {
+        let mut data = BytesMut::with_capacity(raw.len());
+        data.extend_from_slice(&raw);
+        MemPage {
+            n_page,
+            data,
+            offset,
+        }
+    }
+
+    /// Return a reference to the data of page starting from offset
+    pub fn data(&self) -> &[u8] {
+        &self.data[self.offset as usize..]
+    }
+
+    /// Like `data` but return a mutable reference
+    pub fn data_as_mut(&mut self) -> &mut [u8] {
+        &mut self.data[self.offset as usize..]
+    }
+
+    /// Return a reference to all data from page
+    pub fn raw(&self) -> &[u8] {
+        &self.data[..]
     }
 }
 
@@ -54,21 +83,27 @@ impl Pager {
     /// in a byte array. Note that this function can be called even if
     /// the page size is unknown, since the chidb header always occupies
     /// the first 100 bytes of the file.
-    pub fn read_header(&mut self) -> Result<[u8; HEADER_SIZE], ChiError> {
+    pub fn read_header(&mut self) -> Result<BytesMut, ChiError> {
         self.buffer.seek(SeekFrom::Start(0))?;
         let mut header = [0; HEADER_SIZE];
-        let count = self.buffer.read(&mut header)?;
-        if count != HEADER_SIZE {
-            Err(ChiError::NoHeader)
-        } else {
-            Ok(header)
-        }
+        self.buffer.read(&mut header)?;
+        let mut bytes = BytesMut::with_capacity(header.len());
+        bytes.extend_from_slice(&header);
+        Ok(bytes)
+    }
+
+    pub fn write_header(&mut self, header: &[u8; HEADER_SIZE]) -> Result<(), ChiError> {
+        self.buffer.seek(SeekFrom::Start(0))?;
+        self.buffer.write(header)?;
+        Ok(())
     }
 
     /// Allocate an extra page on the file and returns the page number
     pub fn allocate_page(&mut self) -> u32 {
         // We simply increment the page number counter.
         // read_page and write_page take care of the rest.
+        //
+        // TODO: We should create an empty page here???
         self.total_pages += 1;
         self.total_pages
     }
@@ -93,7 +128,15 @@ impl Pager {
         let count = self.buffer.read(&mut data)?;
         println!("Read {} bytes from page {}", count, n_page);
 
-        Ok(MemPage::new(n_page, data))
+        // Page one is special, the first HEADER_SIZE are used by the header
+        // so we start to read after the header.
+        // http://chi.cs.uchicago.edu/chidb/fileformat.html#physical-organization
+        let mut offset = 0;
+        if n_page == 1 {
+            offset = HEADER_SIZE as u16 + 1;
+        }
+
+        Ok(MemPage::new(n_page, data, offset))
     }
 
     pub fn write_page(&mut self, page: &MemPage) -> Result<(), ChiError> {
@@ -107,7 +150,6 @@ impl Pager {
         Ok(())
     }
 
-    /// Check if file is empty
     pub fn is_empty(&self) -> Result<bool, io::Error> {
         let size = self.buffer.metadata()?.len();
         Ok(size == 0)

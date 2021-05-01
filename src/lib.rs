@@ -10,7 +10,7 @@ use std::path::Path;
 
 pub mod pager;
 
-use pager::{Pager, HEADER_SIZE, PAGE_SIZE};
+use pager::{MemPage, Pager, HEADER_SIZE, PAGE_SIZE};
 
 #[derive(PartialEq)]
 pub enum ChiError {
@@ -74,12 +74,44 @@ impl BTree {
         if pager.is_empty()? {
             let mut btree = BTree { pager };
             btree.initialize_header()?;
+            btree.initialize_empty_table_leaf()?;
             Ok(btree)
         } else {
             let mut btree = BTree { pager };
             btree.validate_header()?;
             Ok(btree)
         }
+    }
+
+    /// Loads a B-Tree node from disk
+    ///
+    /// Reads a B-Tree node from a page in the disk. All the information regarding
+    /// the node is stored in a BTreeNode struct (see header file for more details
+    /// on this struct).
+    /// Any changes made to a BTreeNode variable will not be effective in the database
+    /// until write_node is called on that BTreeNode.
+    ///
+    /// Parameters
+    /// - n_page: Page of node to load
+    pub fn get_node_by_page(&mut self, n_page: u32) -> Result<BTreeNode, ChiError> {
+        let page = self.pager.read_page(n_page)?;
+        BTreeNode::load_from_page(page)
+    }
+
+    /// Create a new B-Tree node
+    ///
+    /// Allocates a new page in the file and initializes it as an empty B-Tree node.
+    ///
+    /// Parameters
+    /// - type: Type of B-Tree node
+    pub fn new_node(&mut self, typ: BTreeNodeType) -> Result<BTreeNode, ChiError> {
+        let n_page = self.pager.allocate_page();
+        let page = self.pager.read_page(n_page)?;
+
+        let node = BTreeNode::create(page, typ)?;
+        self.pager.write_page(&node.page)?;
+
+        Ok(node)
     }
 
     fn validate_header(&mut self) -> Result<(), ChiError> {
@@ -91,24 +123,26 @@ impl BTree {
         }
     }
 
+    fn initialize_empty_table_leaf(&mut self) -> Result<(), ChiError> {
+        let n_page = self.pager.allocate_page();
+        let page = self.pager.read_page(n_page)?;
+
+        let node = BTreeNode::create(page, BTreeNodeType::LeafTable)?;
+        self.pager.write_page(&node.page)?;
+        Ok(())
+    }
+
     fn initialize_header(&mut self) -> Result<(), ChiError> {
         let header = BTreeHeader::default();
+        let mut header_bytes = self.pager.read_header()?;
 
-        let n_page = self.pager.allocate_page();
-        let mut page = self.pager.read_page(n_page)?;
-
-        let mut bytes = BytesMut::with_capacity(page.data.len());
-        bytes.extend_from_slice(&page.data);
-
-        let raw = &mut bytes[0..HEADER_SIZE];
+        let raw = &mut header_bytes[0..HEADER_SIZE];
         raw.copy_from_slice(&header.to_bytes()?);
 
-        // TODO: avoid a lot of copies
-        let mut new_data = [0; PAGE_SIZE];
-        new_data.copy_from_slice(&bytes[..]);
-        page.data = new_data;
-
-        self.pager.write_page(&page)?;
+        // TODO: Fix this unecessary copy
+        let mut copy = [0; HEADER_SIZE];
+        copy.copy_from_slice(&raw[..]);
+        self.pager.write_header(&copy)?;
 
         Ok(())
     }
@@ -117,6 +151,144 @@ impl BTree {
         let header_bytes = self.pager.read_header()?;
         let header = BTreeHeader::from_bytes(&header_bytes)?;
         Ok(header)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum BTreeNodeType {
+    InternalTable,
+    LeafTable,
+    InternalIndex,
+    LeafIndex,
+}
+
+impl From<[u8; 1]> for BTreeNodeType {
+    fn from(typ: [u8; 1]) -> Self {
+        match typ[0] {
+            0x05 => Self::InternalTable,
+            0x0D => Self::LeafTable,
+            0x02 => Self::InternalIndex,
+            0x0A => Self::LeafIndex,
+            _ => panic!("Invalid type: {:?}", typ),
+        }
+    }
+}
+
+impl BTreeNodeType {
+    fn value(&self) -> u8 {
+        match self {
+            Self::InternalTable => 0x05,
+            Self::LeafTable => 0x0D,
+            Self::InternalIndex => 0x02,
+            Self::LeafIndex => 0x0A,
+        }
+    }
+}
+
+/// The BTreeNode struct is an in-memory representation of a B-Tree node. Thus,
+/// most of the values in this struct are simply a copy, for ease of access,
+/// of what can be found in the raw disk page. When modifying type, free_offset,
+/// n_cells, cells_offset, or right_page, do so in the corresponding field
+/// of the BTreeNode variable (the changes will be effective once the BTreeNode
+/// is written to disk). Modifications of the
+/// cell offset array or of the cells should be done directly on the in-memory
+/// page returned by the Pager.
+///
+/// See The chidb File Format document for more details on the meaning of each
+/// field.
+pub struct BTreeNode {
+    /// In-memory page returned by the Pager
+    page: MemPage,
+
+    /// The type of page
+    typ: BTreeNodeType,
+
+    /// The byte offset at which the free space starts.
+    /// Note that this must be updated every time the cell offset array grows.
+    free_offset: u16,
+
+    /// The number of cells stored in this page.
+    n_cells: u16,
+
+    /// The byte offset at which the cells start. If the page contains no cells, this field contains the value PageSize.
+    /// This value must be updated every time a cell is added.
+    cells_offset: u16,
+
+    /// Right page (internal nodes only)
+    right_page: u16,
+
+    /// Pointer to start of cell offset array in the in-memory page
+    celloffset_array: u8,
+}
+
+impl BTreeNode {
+    pub fn new(page: MemPage, typ: BTreeNodeType) -> Self {
+        BTreeNode {
+            page,
+            typ,
+            free_offset: 0,
+            n_cells: 0,
+            cells_offset: PAGE_SIZE as u16,
+            right_page: 0,
+            celloffset_array: 0,
+        }
+    }
+
+    /// Create a BTreeNode from a empty MemPage
+    ///
+    /// This function create a new BTreeNode from a empty MemPage
+    /// and populate the MemPage with the initial values of BTreeNode
+    pub fn create(page: MemPage, typ: BTreeNodeType) -> Result<Self, ChiError> {
+        let mut node = Self::new(page, typ);
+
+        let page_data = node.page.data_as_mut();
+        let page_len = page_data.len();
+
+        let bytes = BytesMut::with_capacity(page_len);
+        let mut buffer = BufWriter::with_capacity(page_len, bytes.writer());
+
+        let mut bytes_writen = buffer.write(&[node.typ.value()])?;
+        bytes_writen += buffer.write(&node.free_offset.to_le_bytes())?;
+        bytes_writen += buffer.write(&node.n_cells.to_le_bytes())?;
+        bytes_writen += buffer.write(&node.cells_offset.to_le_bytes())?;
+        bytes_writen += buffer.write(&node.right_page.to_le_bytes())?;
+
+        let empty_space = vec![0; page_len - bytes_writen];
+        buffer.write(&empty_space)?;
+
+        page_data.copy_from_slice(buffer.buffer());
+
+        Ok(node)
+    }
+
+    /// Load BTreeNode from a existing MemPage
+    pub fn load_from_page(page: MemPage) -> Result<Self, ChiError> {
+        let page_data = page.data();
+        let mut buffer = BufReader::new(&page_data[..]);
+
+        let mut typ: [u8; 1] = [0; 1];
+        let mut free_offset = [0; size_of::<u16>()];
+        let mut n_cells = [0; size_of::<u16>()];
+        let mut cells_offset = [0; size_of::<u16>()];
+        let mut righ_page = [0; size_of::<u16>()];
+        let mut celloffset_array = [0; size_of::<u8>()];
+
+        buffer.read(&mut typ)?;
+        buffer.read(&mut free_offset)?;
+        buffer.read(&mut n_cells)?;
+        buffer.read(&mut cells_offset)?;
+        buffer.read(&mut righ_page)?;
+        buffer.read(&mut celloffset_array)?;
+
+        Ok(BTreeNode {
+            page,
+            typ: BTreeNodeType::from(typ),
+            free_offset: u16::from_le_bytes(free_offset),
+            n_cells: u16::from_le_bytes(n_cells),
+            cells_offset: u16::from_le_bytes(cells_offset),
+            right_page: u16::from_le_bytes(righ_page),
+            celloffset_array: u8::from_le_bytes(celloffset_array),
+        })
     }
 }
 
@@ -165,7 +337,7 @@ impl BTreeHeader {
         Ok(raw)
     }
 
-    fn from_bytes(bytes: &[u8; HEADER_SIZE]) -> io::Result<BTreeHeader> {
+    fn from_bytes(bytes: &[u8]) -> io::Result<BTreeHeader> {
         let mut buffer = BufReader::new(&bytes[..]);
 
         let mut magic_bytes = [0; MAGIC_BYTES_SIZE];
@@ -210,6 +382,48 @@ impl Default for BTreeHeader {
 mod tests {
     use super::*;
     use tempfile::{NamedTempFile, TempDir};
+
+    #[test]
+    fn test_create_new_node() -> Result<(), ChiError> {
+        let file = TempDir::new()?.into_path().join("test_create_new_node");
+
+        let mut btree = BTree::open(&file)?;
+        let node = btree.new_node(BTreeNodeType::InternalTable)?;
+
+        assert_eq!(node.page.n_page, 2);
+        assert_eq!(node.typ, BTreeNodeType::InternalTable);
+        assert_eq!(node.free_offset, 0);
+        assert_eq!(node.n_cells, 0);
+        assert_eq!(node.cells_offset, PAGE_SIZE as u16);
+        assert_eq!(node.right_page, 0);
+        assert_eq!(node.celloffset_array, 0);
+
+        // Assert that we can read the node correctly
+        let new_node = btree.get_node_by_page(node.page.n_page)?;
+        assert_eq!(node.page.n_page, new_node.page.n_page);
+        assert_eq!(node.typ, new_node.typ);
+        assert_eq!(node.free_offset, new_node.free_offset);
+        assert_eq!(node.n_cells, new_node.n_cells);
+        assert_eq!(node.cells_offset, new_node.cells_offset);
+        assert_eq!(node.right_page, new_node.right_page);
+        assert_eq!(node.celloffset_array, new_node.celloffset_array);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_node_page_leaf_table() -> Result<(), ChiError> {
+        let file = TempDir::new()?.into_path().join("test_create_new_node");
+
+        let mut btree = BTree::open(&file)?;
+
+        let node = btree.get_node_by_page(1)?;
+
+        assert_eq!(node.page.n_page, 1);
+        assert_eq!(node.typ, BTreeNodeType::LeafTable);
+
+        Ok(())
+    }
 
     #[test]
     fn test_create_empty_btree() -> Result<(), ChiError> {
