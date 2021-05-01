@@ -114,6 +114,34 @@ impl BTree {
         Ok(node)
     }
 
+    /// Write an in-memory B-Tree node to disk
+    ///
+    /// Writes an in-memory B-Tree node to disk. To do this, we need to update
+    /// the in-memory page according to the chidb page format. Since the cell
+    /// offset array and the cells themselves are modified directly on the
+    /// page, the only thing to do is to store the values of "type",
+    /// "free_offset", "n_cells", "cells_offset" and "right_page" in the
+    /// in-memory page.
+    ///
+    /// Parameters
+    /// - node: BTreeNode to write to disk
+    pub fn write_node(&mut self, node: &mut BTreeNode) -> Result<(), ChiError> {
+        let page_data = node.page.data();
+        let bytes = BytesMut::with_capacity(page_data.len());
+        let mut buffer = BufWriter::with_capacity(page_data.len(), bytes.writer());
+
+        buffer.write(&[node.typ.value()])?;
+        buffer.write(&node.free_offset.to_le_bytes())?;
+        buffer.write(&node.n_cells.to_le_bytes())?;
+        buffer.write(&node.cells_offset.to_le_bytes())?;
+        buffer.write(&node.right_page.to_le_bytes())?;
+
+        node.page.set_data(buffer.buffer());
+        self.pager.write_page(&node.page)?;
+
+        Ok(())
+    }
+
     fn validate_header(&mut self) -> Result<(), ChiError> {
         let header = self.read_header()?;
         if MAGIC_BYTES.clone() != header.magic_bytes {
@@ -382,6 +410,42 @@ impl Default for BTreeHeader {
 mod tests {
     use super::*;
     use tempfile::{NamedTempFile, TempDir};
+
+    #[test]
+    fn test_write_first_node_not_override_file_header() -> Result<(), ChiError> {
+        let file = TempDir::new()?.into_path().join("test_write_node");
+
+        let mut btree = BTree::open(&file)?;
+        let mut node = btree.get_node_by_page(1)?;
+        node.free_offset += 1;
+        btree.write_node(&mut node)?;
+
+        let updated_node = btree.get_node_by_page(node.page.n_page)?;
+        assert_eq!(
+            updated_node.free_offset, node.free_offset,
+            "Expected values updated after write first node"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_node() -> Result<(), ChiError> {
+        let file = TempDir::new()?.into_path().join("test_write_node");
+
+        let mut btree = BTree::open(&file)?;
+        let mut node = btree.new_node(BTreeNodeType::InternalTable)?;
+        node.free_offset += 1;
+        btree.write_node(&mut node)?;
+
+        let updated_node = btree.get_node_by_page(node.page.n_page)?;
+        assert_eq!(
+            updated_node.free_offset, node.free_offset,
+            "Expected values updated after write node"
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_create_new_node() -> Result<(), ChiError> {

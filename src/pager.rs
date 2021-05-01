@@ -50,6 +50,18 @@ impl MemPage {
     pub fn raw(&self) -> &[u8] {
         &self.data[..]
     }
+
+    /// Update raw data of page
+    ///
+    /// This function override current in-memory data of page
+    /// to the new raw data from param taking care to update data
+    /// using the offset of page as base.
+    pub fn set_data(&mut self, raw: &[u8]) {
+        let mut data = BytesMut::with_capacity(self.data.capacity());
+        data.extend_from_slice(&self.data[..self.offset as usize]);
+        data.extend_from_slice(raw);
+        self.data = data;
+    }
 }
 
 #[derive(Debug)]
