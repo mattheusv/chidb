@@ -280,6 +280,7 @@ impl BTreeNode {
         bytes_writen += buffer.write(&node.n_cells.to_le_bytes())?;
         bytes_writen += buffer.write(&node.cells_offset.to_le_bytes())?;
         bytes_writen += buffer.write(&node.right_page.to_le_bytes())?;
+        bytes_writen += buffer.write(&node.celloffset_array.to_le_bytes())?;
 
         let empty_space = vec![0; page_len - bytes_writen];
         buffer.write(&empty_space)?;
@@ -460,17 +461,32 @@ mod tests {
         assert_eq!(node.n_cells, 0);
         assert_eq!(node.cells_offset, PAGE_SIZE as u16);
         assert_eq!(node.right_page, 0);
-        assert_eq!(node.celloffset_array, 0);
+        assert_eq!(node.celloffset_array, PAGE_HEADER_SIZE);
 
         // Assert that we can read the node correctly
         let new_node = btree.get_node_by_page(node.page.n_page)?;
-        assert_eq!(node.page.n_page, new_node.page.n_page);
-        assert_eq!(node.typ, new_node.typ);
-        assert_eq!(node.free_offset, new_node.free_offset);
-        assert_eq!(node.n_cells, new_node.n_cells);
-        assert_eq!(node.cells_offset, new_node.cells_offset);
-        assert_eq!(node.right_page, new_node.right_page);
-        assert_eq!(node.celloffset_array, new_node.celloffset_array);
+        assert_eq!(
+            node.page.n_page, new_node.page.n_page,
+            "Expected equals n_page"
+        );
+        assert_eq!(node.typ, new_node.typ, "Expect equal types");
+        assert_eq!(
+            node.free_offset, new_node.free_offset,
+            "Expected equal free_offset"
+        );
+        assert_eq!(node.n_cells, new_node.n_cells, "Expetec equals n_cells");
+        assert_eq!(
+            node.cells_offset, new_node.cells_offset,
+            "Expected equal cells_offset"
+        );
+        assert_eq!(
+            node.right_page, new_node.right_page,
+            "Expected equal righ_page"
+        );
+        assert_eq!(
+            node.celloffset_array, new_node.celloffset_array,
+            "Expected equal celloffset_array"
+        );
 
         Ok(())
     }
