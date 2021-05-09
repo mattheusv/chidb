@@ -17,6 +17,9 @@ pub enum ChiError {
     /// The page has an incorrect page number
     EPageNo,
 
+    /// The provided cell number is invalid
+    ECELLNO,
+
     /// The file does not have a header
     NoHeader,
 
@@ -33,6 +36,7 @@ pub enum ChiError {
 impl std::fmt::Debug for ChiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ChiError::ECELLNO => write!(f, "The provided cell number is invalid"),
             ChiError::EPageNo => write!(f, "page has an incorrect page number"),
             ChiError::NoHeader => write!(f, "file does not have a header"),
             ChiError::Ecorruptheader => write!(f, "invalid database header"),
@@ -182,7 +186,71 @@ impl BTree {
     }
 }
 
-#[derive(Debug, PartialEq)]
+/// Represents a table internal cell
+#[derive(Default, Debug, PartialEq)]
+pub struct TableCellInternal {
+    /// Child page with keys
+    child_page: u32,
+}
+
+/// Represents a table leaf cell
+#[derive(Default, Debug, PartialEq)]
+pub struct TableCellLeaf {
+    /// Number of bytes of data stored in this cell
+    data_size: u32,
+
+    /// Pointer to in-memory copy of data stored in this cell
+    data: u8,
+}
+
+/// Represents a index internal cell
+#[derive(Default, Debug, PartialEq)]
+pub struct IndexCellInternal {
+    /// Primary key of row where the indexed field is equal to key
+    key_k: u32,
+
+    /// Child page with keys
+    child_page: u32,
+}
+
+/// Represents a index leaf cell
+#[derive(Default, Debug, PartialEq)]
+pub struct IndexCellLeaf {
+    /// Primary key of row where the indexed field is equal to key
+    key_pk: u32,
+}
+
+/// BTreeCell is an in-memory representation of a cell.
+pub struct BTreeCell {
+    /// Type of page where this cell is contained
+    typ: BTreeNodeType,
+
+    /// Key of cell
+    key: u32,
+
+    internal_table: TableCellInternal,
+
+    leaf_table: TableCellLeaf,
+
+    internal_index: IndexCellInternal,
+
+    leaf_index: IndexCellLeaf,
+}
+
+impl BTreeCell {
+    pub fn new(typ: &BTreeNodeType, key: u32) -> Self {
+        Self {
+            typ: typ.clone(),
+            key,
+            internal_table: TableCellInternal::default(),
+            leaf_table: TableCellLeaf::default(),
+            internal_index: IndexCellInternal::default(),
+            leaf_index: IndexCellLeaf::default(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum BTreeNodeType {
     InternalTable,
     LeafTable,
@@ -249,7 +317,10 @@ pub struct BTreeNode {
     celloffset_array: u8,
 }
 
+const PAGE_HEADER_SIZE: u8 = 12;
+
 impl BTreeNode {
+    /// Initialize a new BTreeNode with page, type and default values
     pub fn new(page: MemPage, typ: BTreeNodeType) -> Self {
         BTreeNode {
             page,
@@ -258,8 +329,132 @@ impl BTreeNode {
             n_cells: 0,
             cells_offset: PAGE_SIZE as u16,
             right_page: 0,
-            celloffset_array: 0,
+            celloffset_array: PAGE_HEADER_SIZE,
         }
+    }
+
+    /// Read the contents of a cell
+    ///
+    /// Reads the contents of a cell from a BTreeNode and stores them in a BTreeCell.
+    /// This involves the following:
+    ///  1. Find out the offset of the requested cell.
+    ///  2. Read the cell from the in-memory page, and parse its
+    ///     contents (refer to The chidb File Format document for
+    ///     the format of cells).
+    ///
+    /// Parmeters
+    /// - n_cell: Cell number
+    ///
+    pub fn get_cell(&mut self, n_cell: u16) -> Result<BTreeCell, ChiError> {
+        let page_data = self.page.data();
+
+        let offset =
+            ((self.celloffset_array as u16) + (self.n_cells * size_of::<u16>() as u16)) as usize;
+
+        println!("offset: {}", offset);
+        let mut buffer = BufReader::new(&page_data[PAGE_HEADER_SIZE as usize..offset]);
+
+        let mut cells_offset = Vec::new();
+
+        loop {
+            let mut cell_offset = [0; size_of::<u16>()];
+            match buffer.read(&mut cell_offset) {
+                Ok(readed) => {
+                    if readed == 0 {
+                        break;
+                    }
+                    let id = u16::from_le_bytes(cell_offset);
+                    println!("readed: {}", readed);
+                    println!("id: {}", id);
+                    cells_offset.push(id);
+                }
+                Err(err) => match err.kind() {
+                    io::ErrorKind::UnexpectedEof => break,
+                    _ => return Err(ChiError::from(err)),
+                },
+            }
+        }
+
+        println!("{:?}", cells_offset);
+
+        let offset = match cells_offset.binary_search(&n_cell) {
+            Ok(offset) => offset,
+            Err(_) => return Err(ChiError::ECELLNO),
+        };
+
+        match self.typ {
+            BTreeNodeType::InternalTable => self.get_internal_table_cell(offset),
+            _ => todo!(),
+        }
+    }
+
+    /// Insert a new cell into a B-Tree node
+    ///
+    /// Inserts a new cell into a B-Tree node at a specified position n_cell.
+    /// This involves the following:
+    ///  1. Add the cell at the top of the cell area. This involves "translating"
+    ///     the BTreeCell into the chidb format (refer to The chidb File Format
+    ///     document for the format of cells).
+    ///  2. Modify cells_offset in BTreeNode to reflect the growth in the cell area.
+    ///  3. Modify the cell offset array so that all values in positions >= ncell
+    ///     are shifted one position forward in the array. Then, set the value of
+    ///     position ncell to be the offset of the newly added cell.
+    ///
+    /// This function assumes that there is enough space for this cell in this node.
+    ///
+    /// Parameters
+    /// - n_cell: Cell number
+    /// - cell: BTreeCell to insert.
+    pub fn insert_cell(&mut self, n_cell: u16, cell: &BTreeCell) -> Result<(), ChiError> {
+        match cell.typ {
+            BTreeNodeType::InternalTable => {
+                let bytes = BytesMut::new();
+                let mut buffer = BufWriter::new(bytes.writer());
+
+                buffer.write(&cell.internal_table.child_page.to_le_bytes())?;
+                buffer.write(&cell.key.to_le_bytes())?;
+
+                // Since cells are added from botton to up, so to get the offset of new cell
+                // we just subtract the cells_offset with the buffer capacity to fill from leaf to
+                // right
+                // TODO: This could result in negative number???
+                let offset_cell = self.cells_offset - buffer.capacity() as u16;
+
+                self.page.write_at(offset_cell as usize, buffer.buffer());
+
+                self.page
+                    .write_at(self.celloffset_array as usize, &n_cell.to_le_bytes());
+
+                self.cells_offset = offset_cell;
+                self.celloffset_array += size_of::<u16>() as u8;
+                self.n_cells += 1;
+            }
+            _ => {
+                todo!()
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_internal_table_cell(&mut self, offset: usize) -> Result<BTreeCell, ChiError> {
+        let page_data = self.page.data();
+
+        let mut child_page = [0; size_of::<u32>()];
+        let mut key = [0; size_of::<u32>()];
+        let cell = &page_data[offset..offset + child_page.len() + key.len()];
+
+        let mut buffer = BufReader::new(cell);
+
+        buffer.read(&mut child_page)?;
+        buffer.read(&mut key)?;
+
+        let mut cell = BTreeCell::new(&self.typ, u32::from_le_bytes(key));
+        cell.internal_table = TableCellInternal {
+            child_page: u32::from_le_bytes(child_page),
+        };
+
+        Ok(cell)
     }
 
     /// Create a BTreeNode from a empty MemPage
@@ -411,6 +606,43 @@ impl Default for BTreeHeader {
 mod tests {
     use super::*;
     use tempfile::{NamedTempFile, TempDir};
+
+    #[test]
+    fn test_write_get_node_cell() -> Result<(), ChiError> {
+        let file = TempDir::new()?.into_path().join("test_invalid_node_cell");
+
+        let mut btree = BTree::open(&file)?;
+        let mut node = btree.new_node(BTreeNodeType::InternalTable)?;
+
+        let n_cell = 1;
+
+        let cell = BTreeCell::new(&node.typ, 10);
+        node.insert_cell(n_cell, &cell)?;
+
+        let new_cell = node.get_cell(n_cell)?;
+
+        assert_eq!(cell.key, new_cell.key);
+        assert_eq!(cell.internal_table, new_cell.internal_table);
+        assert_eq!(cell.leaf_table, new_cell.leaf_table);
+        assert_eq!(cell.internal_index, new_cell.internal_index);
+        assert_eq!(cell.leaf_index, new_cell.leaf_index);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_node_cell() -> Result<(), ChiError> {
+        let file = TempDir::new()?.into_path().join("test_invalid_node_cell");
+
+        let mut btree = BTree::open(&file)?;
+        let mut node = btree.new_node(BTreeNodeType::InternalTable)?;
+
+        let result = node.get_cell(1);
+
+        assert_eq!(result.err(), Some(ChiError::ECELLNO));
+
+        Ok(())
+    }
 
     #[test]
     fn test_write_first_node_not_override_file_header() -> Result<(), ChiError> {

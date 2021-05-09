@@ -18,21 +18,27 @@ pub struct MemPage {
     pub n_page: u32,
 
     /// Offset where to start to read from data
-    pub offset: u16,
+    offset: u16,
 
     /// Page bytes data
-    data: BytesMut,
+    data: Vec<u8>,
 }
 
 impl MemPage {
     /// Create a new MemPage
-    pub fn new(n_page: u32, raw: [u8; PAGE_SIZE], offset: u16) -> Self {
-        let mut data = BytesMut::with_capacity(raw.len());
-        data.extend_from_slice(&raw);
+    pub fn new(n_page: u32, raw: &[u8; PAGE_SIZE], offset: u16) -> Self {
         MemPage {
+            data: raw.to_vec(),
             n_page,
-            data,
             offset,
+        }
+    }
+
+    pub fn write_at(&mut self, at: usize, data: &[u8]) {
+        let mut at_idx = at;
+        for v in data {
+            self.data.insert(at_idx, *v);
+            at_idx += 1;
         }
     }
 
@@ -57,10 +63,10 @@ impl MemPage {
     /// to the new raw data from param taking care to update data
     /// using the offset of page as base.
     pub fn set_data(&mut self, raw: &[u8]) {
-        let mut data = BytesMut::with_capacity(self.data.capacity());
-        data.extend_from_slice(&self.data[..self.offset as usize]);
-        data.extend_from_slice(raw);
-        self.data = data;
+        let mut new = Vec::with_capacity(self.data.len());
+        new.extend(&self.data[..self.offset as usize]);
+        new.extend(&raw.to_vec());
+        self.data = new;
     }
 }
 
@@ -148,7 +154,7 @@ impl Pager {
             offset = HEADER_SIZE as u16 + 1;
         }
 
-        Ok(MemPage::new(n_page, data, offset))
+        Ok(MemPage::new(n_page, &data, offset))
     }
 
     pub fn write_page(&mut self, page: &MemPage) -> Result<(), ChiError> {
