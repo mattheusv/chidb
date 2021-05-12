@@ -68,8 +68,8 @@ type Pager struct {
 	totalPages uint32
 }
 
-// Open opens a file for paged access
-func Open(filename string) (*Pager, error) {
+// OpenPager opens a file for paged access
+func OpenPager(filename string) (*Pager, error) {
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_RDWR, os.ModePerm)
 	if err != nil {
 		return nil, err

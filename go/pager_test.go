@@ -50,7 +50,7 @@ func openPager(tb testing.TB) *chidb.Pager {
 	db, err := os.CreateTemp(os.TempDir(), tb.Name())
 	require.Nil(tb, err)
 
-	pager, err := chidb.Open(db.Name())
+	pager, err := chidb.OpenPager(db.Name())
 	require.Nil(tb, err)
 	return pager
 }
