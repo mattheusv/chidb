@@ -169,7 +169,6 @@ impl Pager {
     }
 
     pub fn is_empty(&self) -> Result<bool, io::Error> {
-        let size = self.buffer.metadata()?.len();
-        Ok(size == 0)
+        Ok(self.buffer.metadata()?.len() == 0)
     }
 }

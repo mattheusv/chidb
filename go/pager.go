@@ -1,6 +1,7 @@
 package chidb
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -21,12 +22,45 @@ type MemPage struct {
 	// Number of physical number
 	number uint32
 
-	// Offset where to start to read from data
+	// Offset where to start to read or write on data
 	offset uint16
 
 	// Page bytes data
-	// TODO: change this to fixed size list
-	data []byte
+	data [PageSize]byte
+}
+
+// Read returns the bytes of the page
+// The returned data is only data avaliable to write in page
+func (m *MemPage) Read() []byte {
+	return m.data[m.offset:]
+}
+
+// Write write data on current page
+func (m *MemPage) Write(data []byte) error {
+	buffer := bytes.NewBuffer([]byte(""))
+	buffer.Grow(PageSize)
+
+	if _, err := buffer.Write(m.data[:m.offset]); err != nil {
+		return err
+	}
+
+	if _, err := buffer.Write(data); err != nil {
+		return err
+	}
+
+	if l := buffer.Len(); l != PageSize {
+		return fmt.Errorf("invalid page size to write: expected %d got %d", PageSize, l)
+	}
+
+	newData := buffer.Bytes()
+	copy(m.data[:], newData[:PageSize])
+
+	return nil
+}
+
+// Len returns the lenght of page data available to read and write
+func (m *MemPage) Len() int {
+	return len(m.Read())
 }
 
 type Pager struct {
@@ -93,19 +127,21 @@ func (p *Pager) ReadPage(page uint32) (*MemPage, error) {
 		return nil, err
 	}
 
-	data := make([]byte, 0, PageSize)
-	count, err := p.buffer.Read(data)
+	var data [PageSize]byte
+	count, err := p.buffer.Read(data[:])
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("read buffer: %w", err)
+		}
 	}
 	log.Printf("Read %d bytes from page %d\n", count, page)
 
-	// Page one is special, the first HEADER_SIZE are used by the header
+	// Page one is special, the first `HeaderSize` are used by the header
 	// so we start to read after the header.
 	// http://chi.cs.uchicago.edu/chidb/fileformat.html#physical-organization
 	offset := uint16(0)
 	if page == 1 {
-		offset = HeaderSize + 1
+		offset = HeaderSize
 	}
 
 	return &MemPage{
@@ -118,7 +154,7 @@ func (p *Pager) ReadPage(page uint32) (*MemPage, error) {
 // WritePage write a page to file
 // This page writes the in-memory copy of a page (stored in a MemPage
 // struct) back to disk.
-func (p *Pager) WritePage(page MemPage) error {
+func (p *Pager) WritePage(page *MemPage) error {
 	if err := p.pageIsValid(page.number); err != nil {
 		return err
 	}
@@ -128,10 +164,10 @@ func (p *Pager) WritePage(page MemPage) error {
 	}
 
 	if l := len(page.data); l != PageSize {
-		return fmt.Errorf("invalid page data size %d", l)
+		return fmt.Errorf("invalid page data size: expected %d got %d", PageSize, l)
 	}
 
-	count, err := p.buffer.Write(page.data)
+	count, err := p.buffer.Write(page.data[:])
 	if err != nil {
 		return err
 	}
@@ -143,9 +179,7 @@ func (p *Pager) WritePage(page MemPage) error {
 // AllocatePage Allocate an extra page on the file and returns the page number
 func (p *Pager) AllocatePage() uint32 {
 	// We simply increment the page number counter.
-	// read_page and write_page take care of the rest.
-	//
-	// TODO: We should create an empty page here???
+	// ReadPage and WritePage take care of the rest.
 	p.totalPages += 1
 	return p.totalPages
 }
