@@ -70,7 +70,7 @@ type Pager struct {
 
 // OpenPager opens a file for paged access
 func OpenPager(filename string) (*Pager, error) {
-	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_RDWR, os.ModePerm)
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
@@ -123,12 +123,8 @@ func (p *Pager) ReadPage(page uint32) (*MemPage, error) {
 		return nil, err
 	}
 
-	if err := p.seekPage(page); err != nil {
-		return nil, err
-	}
-
 	var data [PageSize]byte
-	count, err := p.buffer.Read(data[:])
+	count, err := p.buffer.ReadAt(data[:], p.offset(page))
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("read buffer: %w", err)
@@ -159,15 +155,12 @@ func (p *Pager) WritePage(page *MemPage) error {
 		return err
 	}
 
-	if err := p.seekPage(page.number); err != nil {
-		return err
-	}
-
 	if l := len(page.data); l != PageSize {
 		return fmt.Errorf("invalid page data size: expected %d got %d", PageSize, l)
 	}
 
-	count, err := p.buffer.Write(page.data[:])
+	offset := p.offset(page.number)
+	count, err := p.buffer.WriteAt(page.data[:], offset)
 	if err != nil {
 		return err
 	}
@@ -192,6 +185,10 @@ func (p *Pager) IsEmpty() (bool, error) {
 	return info.Size() == 0, nil
 }
 
+func (p *Pager) Close() error {
+	return p.buffer.Close()
+}
+
 func (p *Pager) pageIsValid(page uint32) error {
 	if page > p.totalPages || page <= 0 {
 		return ErrIncorrectPageNumber
@@ -199,10 +196,6 @@ func (p *Pager) pageIsValid(page uint32) error {
 	return nil
 }
 
-func (p *Pager) seekPage(page uint32) error {
-	seek := (page - 1) * PageSize
-	if _, err := p.buffer.Seek(io.SeekStart, int(seek)); err != nil {
-		return err
-	}
-	return nil
+func (p *Pager) offset(page uint32) int64 {
+	return int64((page - 1) * PageSize)
 }
