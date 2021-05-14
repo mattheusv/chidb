@@ -70,6 +70,44 @@ func (b *BTree) GetNodeByPage(nPage uint32) (*BTreeNode, error) {
 	return BTreeNodeFromPage(page)
 }
 
+// NewNode create a new B-Tree node
+//
+// Allocates a new page in the file and initializes it as an empty B-Tree node.
+func (b *BTree) NewNode(typ BTreeNodeType) (*BTreeNode, error) {
+	nPage := b.pager.AllocatePage()
+	page, err := b.pager.ReadPage(nPage)
+	if err != nil {
+		return nil, err
+	}
+
+	node := NewBTreeNode(page, typ)
+
+	bytes, err := node.Bytes()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := page.Write(bytes); err != nil {
+		return nil, err
+	}
+
+	if err := b.pager.WritePage(page); err != nil {
+		return nil, err
+	}
+
+	return node, nil
+}
+
+// Initialize a B-Tree node
+//
+// Initializes a database page to contain an empty B-Tree node. The
+// database page is assumed to exist and to have been already allocated
+// by the pager.
+func (b *BTree) InitEmptyNode(nPage uint32, typ BTreeNodeType) error {
+	// FIXME: I don't know how to implement this since NewNode already creates a new empty node
+	return errors.New("not implemented")
+}
+
 // Close closes the btree buffer
 func (b *BTree) Close() error {
 	return b.pager.Close()
