@@ -18,6 +18,30 @@ func TestBTreeFirtNodePageLeafTable(t *testing.T) {
 }
 
 func TestWriteFirstNodeNotOverrideFileHeader(t *testing.T) {
+	btree := openBtree(t)
+
+	headerBeforeWrite, err := btree.ReadHeader()
+	require.Nil(t, err, "Expected nil error to read header before write node")
+
+	node, err := btree.GetNodeByPage(1)
+	require.Nil(t, err, "Expected nil error to get first node page")
+
+	node.freeOffset++
+
+	err = btree.WriteNode(node)
+	require.Nil(t, err, "Expected nil error to write first node page")
+
+	updatedNode, err := btree.GetNodeByPage(node.page.number)
+	require.Nil(t, err, "Expected nil error to get first node page after write")
+
+	headerAfterWrite, err := btree.ReadHeader()
+	require.Nil(t, err, "Expected nil error to read header after write node")
+
+	// Assert that value is correct readed after header
+	assert.Equal(t, node.freeOffset, updatedNode.freeOffset)
+
+	// Assert that header is equal before and after write first node
+	assert.Equal(t, headerBeforeWrite, headerAfterWrite, "Expected equal headers before and after write first node")
 }
 
 func TestCreateNewNode(t *testing.T) {

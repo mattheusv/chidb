@@ -108,6 +108,26 @@ func (b *BTree) InitEmptyNode(nPage uint32, typ BTreeNodeType) error {
 	return errors.New("not implemented")
 }
 
+// WriteNode writes an in-memory B-Tree node to disk
+//
+// Writes an in-memory B-Tree node to disk. To do this, we need to update
+// the in-memory page according to the chidb page format. Since the cell
+// offset array and the cells themselves are modified directly on the
+// page, the only thing to do is to store the values of "type",
+// "free_offset", "n_cells", "cells_offset" and "right_page" in the
+// in-memory page.
+func (b *BTree) WriteNode(node *BTreeNode) error {
+	bytes, err := node.Bytes()
+	if err != nil {
+		return err
+	}
+	if err := node.page.Write(bytes); err != nil {
+		return err
+	}
+
+	return b.pager.WritePage(node.page)
+}
+
 // Close closes the btree buffer
 func (b *BTree) Close() error {
 	return b.pager.Close()
@@ -140,7 +160,7 @@ func (b *BTree) initializeEmptyTableLeaf() error {
 }
 
 func (b *BTree) validateHeader() error {
-	header, err := b.readHeader()
+	header, err := b.ReadHeader()
 	if err != nil {
 		return err
 	}
@@ -150,7 +170,8 @@ func (b *BTree) validateHeader() error {
 	return ErrCorruptHeader
 }
 
-func (b *BTree) readHeader() (*BTreeHeader, error) {
+// ReadHeader returns the header values of btree file
+func (b *BTree) ReadHeader() (*BTreeHeader, error) {
 	bytes, err := b.pager.ReadHeader()
 	if err != nil {
 		return nil, err
