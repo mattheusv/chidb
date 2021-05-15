@@ -8,6 +8,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWriteNode(t *testing.T) {
+	btree := openBtree(t)
+
+	node, err := btree.NewNode(InternalTable)
+	require.Nil(t, err, "Expected nil errro to create new node")
+
+	node.freeOffset++
+	node.nCells++
+	node.cellsOffset++
+	node.rightPage++
+	node.cellOffsetArray++
+
+	err = btree.WriteNode(node)
+	require.Nil(t, err, "Expected nil error to write node")
+
+	updatedNode, err := btree.GetNodeByPage(node.page.number)
+	require.Nil(t, err, "Expected nil error to get updated node")
+
+	assert.Equal(t, node.typ, updatedNode.typ, "Expected equals type after write and read")
+	assert.Equal(t, node.freeOffset, updatedNode.freeOffset, "Expected equals free offset after write and read")
+	assert.Equal(t, node.nCells, updatedNode.nCells, "Expected equals number cells after write and read")
+	assert.Equal(t, node.cellsOffset, updatedNode.cellsOffset, "Expected equals cells offset after write and read")
+	assert.Equal(t, node.rightPage, updatedNode.rightPage, "Expected equals righ page after write and read")
+	assert.Equal(t, node.cellOffsetArray, updatedNode.cellOffsetArray, "Expected equals cell offset array after write and read")
+}
+
 func TestBTreeFirtNodePageLeafTable(t *testing.T) {
 	btree := openBtree(t)
 
