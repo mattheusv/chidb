@@ -1,10 +1,9 @@
-package chidb_test
+package chidb
 
 import (
 	"os"
 	"testing"
 
-	"github.com/msAlcantara/chidb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -12,7 +11,7 @@ import (
 func TestPageWriteReadHeader(t *testing.T) {
 	pager := openPager(t)
 
-	btree := chidb.DefaultBTreeHeader()
+	btree := DefaultBTreeHeader()
 	writenHeader, err := btree.Bytes()
 	require.Nil(t, err)
 
@@ -22,7 +21,7 @@ func TestPageWriteReadHeader(t *testing.T) {
 	readHeader, err := pager.ReadHeader()
 	require.Nil(t, err)
 
-	assert.Equal(t, chidb.HeaderSize, len(readHeader), "Expected equals header size")
+	assert.Equal(t, HeaderSize, len(readHeader), "Expected equals header size")
 	assert.Equal(t, writenHeader, readHeader, "Expected equals headers after write and read")
 }
 
@@ -34,7 +33,7 @@ func TestPageWriteReadPage(t *testing.T) {
 	page, err := pager.ReadPage(nPage)
 	require.Nil(t, err)
 
-	node := chidb.NewBTreeNode(page, chidb.LeafTable)
+	node := NewBTreeNode(page, LeafTable)
 
 	nodeBytes, err := node.Bytes()
 	require.Nil(t, err)
@@ -46,11 +45,11 @@ func TestPageWriteReadPage(t *testing.T) {
 	require.Nil(t, err)
 }
 
-func openPager(tb testing.TB) *chidb.Pager {
+func openPager(tb testing.TB) *Pager {
 	db, err := os.CreateTemp(os.TempDir(), tb.Name())
 	require.Nil(tb, err)
 
-	pager, err := chidb.OpenPager(db.Name())
+	pager, err := OpenPager(db.Name())
 	require.Nil(tb, err)
 	return pager
 }

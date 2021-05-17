@@ -8,6 +8,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestInsertCellGetCell(t *testing.T) {
+	btree := openBtree(t)
+
+	node, err := btree.NewNode(LeafTable)
+	require.Nil(t, err, "Expected nil errro to create new node")
+
+	cell := BTreeCell{
+		typ: node.typ,
+		key: 1,
+	}
+	cell.fields.tableLeaf.data = []byte("Hello World")
+	cell.fields.tableLeaf.size = 10
+
+	err = node.InsertCell(1, &cell)
+	require.Nil(t, err, "Expected nil error to insert cell")
+
+	insertedCell, err := node.GetCell(1)
+	require.Nil(t, err, "Expected nil error to get cell after write")
+
+	assert.Equal(t, cell.typ, insertedCell.typ, "Expected equal types after write and get")
+	assert.Equal(t, cell.key, insertedCell.key, "Expected equal keys after write and get")
+	assert.Equal(t, cell.fields.tableLeaf.size, insertedCell.fields.tableLeaf.size, "Expected equal size after write and get")
+	assert.Equal(t, cell.fields.tableLeaf.data, insertedCell.fields.tableLeaf.data, "Expected equal data after write and get")
+
+}
+
 func TestWriteNode(t *testing.T) {
 	btree := openBtree(t)
 

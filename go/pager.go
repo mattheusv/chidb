@@ -30,12 +30,57 @@ type MemPage struct {
 }
 
 // Read returns the bytes of the page
-// The returned data is only data avaliable to write in page
+// The returned data is only data avaliable to write and read in page
 func (m *MemPage) Read() []byte {
 	return m.data[m.offset:]
 }
 
+// WriteAt write data on page after at value
+func (m *MemPage) WriteAt(data []byte, at uint16) error {
+	buffer := bytes.NewBuffer([]byte(""))
+	buffer.Grow(PageSize)
+
+	dataSize := uint16(len(m.data))
+
+	if l := dataSize; l < at {
+		return fmt.Errorf("page data %d is less than %d", l, at)
+	}
+
+	// Write data that is before of `at` value
+	if _, err := buffer.Write(m.data[:at]); err != nil {
+		return err
+	}
+
+	// Write new data
+	writen, err := buffer.Write(data)
+	if err != nil {
+		return err
+	}
+
+	remaning := at + uint16(writen)
+
+	if remaning < dataSize {
+		// Write the remaning bytes
+		if _, err := buffer.Write(m.data[remaning:]); err != nil {
+			return err
+		}
+	}
+
+	if uint16(buffer.Len()) != dataSize {
+		fmt.Printf("Buffer len: %d\n", buffer.Len())
+		fmt.Printf("Page len: %d\n", dataSize)
+		fmt.Println("-----------------------")
+		panic("something goes really wrong here")
+	}
+
+	newData := buffer.Bytes()
+	copy(m.data[:], newData[:PageSize])
+
+	return nil
+}
+
 // Write write data on current page
+// NOTE: the data param should has the same size of PageSize
 func (m *MemPage) Write(data []byte) error {
 	buffer := bytes.NewBuffer([]byte(""))
 	buffer.Grow(PageSize)
@@ -86,7 +131,7 @@ func OpenPager(filename string) (*Pager, error) {
 // the page size is unknown, since the chidb header always occupies
 // the first 100 bytes of the file.
 func (p *Pager) ReadHeader() ([]byte, error) {
-	if _, err := p.buffer.Seek(io.SeekStart, 0); err != nil {
+	if _, err := p.buffer.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
 
@@ -99,7 +144,7 @@ func (p *Pager) ReadHeader() ([]byte, error) {
 }
 
 func (p *Pager) WriteHeader(header []byte) error {
-	if _, err := p.buffer.Seek(io.SeekStart, 0); err != nil {
+	if _, err := p.buffer.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 
