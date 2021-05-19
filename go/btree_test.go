@@ -19,7 +19,7 @@ func TestInsertCellGetCell(t *testing.T) {
 		key: 1,
 	}
 	cell.fields.tableLeaf.data = []byte("Hello World")
-	cell.fields.tableLeaf.size = 10
+	cell.fields.tableLeaf.size = 11
 
 	err = node.InsertCell(1, &cell)
 	require.Nil(t, err, "Expected nil error to insert cell")
@@ -108,7 +108,7 @@ func TestCreateNewNode(t *testing.T) {
 	assert.Equal(t, uint16(0), node.nCells, "Expected equal number cells")
 	assert.Equal(t, uint16(PageSize), node.cellsOffset, "Expected equal cells offset")
 	assert.Equal(t, uint16(0), node.rightPage, "Expected equal right page")
-	assert.Equal(t, byte(PageHeaderSize), node.cellOffsetArray, "Expected equal cell offset array")
+	assert.Equal(t, byte(PageHeaderSize+1), node.cellOffsetArray, "Expected equal cell offset array")
 
 	newNode, err := btree.GetNodeByPage(node.page.number)
 	require.Nil(t, err, "Expected nil error to get new node created")

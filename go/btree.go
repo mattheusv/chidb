@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"unsafe"
 )
 
@@ -329,16 +328,14 @@ func BTreeNodeFromPage(page *MemPage) (*BTreeNode, error) {
 //     contents (refer to The chidb File Format document for
 //     the format of cells).
 func (n *BTreeNode) GetCell(nCell uint16) (*BTreeCell, error) {
-	cellsOffset, idx, found := n.getCellOffset(nCell)
+	_, offset, found := n.getCellOffset(nCell)
 	if !found {
 		return nil, fmt.Errorf("not found cell %d", nCell)
 	}
 
 	buffer := bytes.NewReader(n.page.Read())
 
-	offset := cellsOffset[idx]
-	seek := int64(PageHeaderSize + 1 + int(offset))
-	if _, err := buffer.Seek(seek, io.SeekStart); err != nil {
+	if _, err := buffer.Seek(int64(offset), io.SeekStart); err != nil {
 		return nil, err
 	}
 
@@ -365,6 +362,7 @@ func (n *BTreeNode) GetCell(nCell uint16) (*BTreeCell, error) {
 			return nil, err
 		}
 
+		cell.typ = n.typ
 		cell.fields.tableLeaf.size = size
 		cell.fields.tableLeaf.data = data
 		cell.key = binary.LittleEndian.Uint32(key)
@@ -393,7 +391,7 @@ func (n *BTreeNode) GetCell(nCell uint16) (*BTreeCell, error) {
 //
 // This function assumes that there is enough space for this cell in this node.
 func (n *BTreeNode) InsertCell(nCell uint16, cell *BTreeCell) error {
-	cellOffsetArray, idx, found := n.getCellOffset(nCell)
+	cellOffsetArray, _, found := n.getCellOffset(nCell)
 	if found {
 		return fmt.Errorf("cell %d already exists", nCell)
 	}
@@ -403,25 +401,30 @@ func (n *BTreeNode) InsertCell(nCell uint16, cell *BTreeCell) error {
 		return err
 	}
 
+	// Calculate the cell offset and write the cell on this offset in page
+	// and set the current in BTreeNode cells offset start to the new offset
 	cellOffset := n.cellsOffset - uint16(len(bytes))
 	if err := n.page.WriteAt(bytes, cellOffset); err != nil {
 		return err
 	}
-
 	n.cellsOffset = cellOffset
 
-	nCellBytes := make([]byte, unsafe.Sizeof(nCell))
-	binary.LittleEndian.PutUint16(nCellBytes, nCell)
-
-	newCellOffsetArray := make([]byte, 0, len(cellOffsetArray))
-	newCellOffsetArray = append(newCellOffsetArray, cellOffsetArray[:idx]...)
-	newCellOffsetArray = append(newCellOffsetArray, nCellBytes...)
-	newCellOffsetArray = append(newCellOffsetArray, cellOffsetArray[idx:]...)
-
-	if err := n.page.WriteAt(newCellOffsetArray, uint16(n.cellOffsetArray)); err != nil {
-		return err
+	// Add the new cell offset on existed cell offset array
+	// and convert this array to a slice of bytes
+	cellOffsetArray = append(cellOffsetArray, cellOffset)
+	cellOffsetArrayBytes := make([]byte, 0)
+	for _, offset := range cellOffsetArray {
+		b := make([]byte, unsafe.Sizeof(offset))
+		binary.LittleEndian.PutUint16(b, offset)
+		cellOffsetArrayBytes = append(cellOffsetArrayBytes, b...)
 	}
 
+	// Write the new cell offset array on page
+	// count the new cell added
+	// and updated the free offset start
+	if err := n.page.WriteAt(cellOffsetArrayBytes, uint16(n.cellOffsetArray)); err != nil {
+		return err
+	}
 	n.nCells++
 	n.freeOffset += n.nCells * uint16(unsafe.Sizeof(nCell))
 
@@ -475,14 +478,38 @@ func (b *BTreeNode) Type() BTreeNodeType {
 	return b.typ
 }
 
-func (n *BTreeNode) getCellOffset(nCell uint16) ([]byte, uint16, bool) {
+func (n *BTreeNode) getCellOffset(nCell uint16) ([]uint16, uint16, bool) {
 	data := n.page.Read()
 	cellOffsetArray := data[n.cellOffsetArray:n.freeOffset]
-	if len(cellOffsetArray) == 0 {
-		return cellOffsetArray, 0, false
+
+	if len(cellOffsetArray)%2 != 0 {
+		panic("invalid array of cellOffsetArray. This can't happen")
 	}
-	idx := sort.Search(int(nCell), func(i int) bool { return uint16(cellOffsetArray[i]) >= nCell })
-	return cellOffsetArray, uint16(idx), idx < len(cellOffsetArray) && uint16(cellOffsetArray[idx]) == nCell
+
+	if len(cellOffsetArray) == 0 {
+		return []uint16{}, 0, false
+	}
+
+	// TODO: Find a better way to convert a slice of bytes to a slice of uint16
+	start := 0
+	offsets := make([]uint16, 0)
+	cellOffsetArrayLength := len(cellOffsetArray)
+	for range cellOffsetArray {
+		end := start + 2
+		if end > cellOffsetArrayLength {
+			break
+		}
+		offsets = append(offsets, binary.LittleEndian.Uint16(cellOffsetArray[start:end]))
+		start += 2
+	}
+
+	// This means that the request nCell do not exists in cells offset array
+	// so we returned the existed array and false
+	if int(nCell) > len(offsets) {
+		return offsets, 0, false
+	}
+
+	return offsets, offsets[int(nCell-1)], true
 }
 
 // BTreeCell is an in-memory representation of a cell.
