@@ -341,7 +341,22 @@ func (n *BTreeNode) GetCell(nCell uint16) (*BTreeCell, error) {
 
 	switch n.typ {
 	case InternalTable:
-		return nil, fmt.Errorf("not implemeted")
+		var cell BTreeCell
+		childPage := make([]byte, unsafe.Sizeof(cell.fields.tableInternal.childPage))
+		key := make([]byte, unsafe.Sizeof(cell.key))
+
+		if _, err := buffer.Read(childPage); err != nil {
+			return nil, err
+		}
+		if _, err := buffer.Read(key); err != nil {
+			return nil, err
+		}
+
+		cell.typ = n.typ
+		cell.key = binary.LittleEndian.Uint32(key)
+		cell.fields.tableInternal.childPage = binary.LittleEndian.Uint32(childPage)
+
+		return &cell, nil
 	case LeafTable:
 		var cell BTreeCell
 
@@ -369,9 +384,44 @@ func (n *BTreeNode) GetCell(nCell uint16) (*BTreeCell, error) {
 
 		return &cell, nil
 	case InternalIndex:
-		return nil, fmt.Errorf("not implemeted")
+		var cell BTreeCell
+
+		childPage := make([]byte, unsafe.Sizeof(cell.fields.indexInternal.childPage))
+		key := make([]byte, unsafe.Sizeof(cell.key))
+		keyPk := make([]byte, unsafe.Sizeof(cell.fields.indexInternal.keyPk))
+		if _, err := buffer.Read(childPage); err != nil {
+			return nil, err
+		}
+		if _, err := buffer.Read(key); err != nil {
+			return nil, err
+		}
+		if _, err := buffer.Read(keyPk); err != nil {
+			return nil, err
+		}
+
+		cell.typ = n.typ
+		cell.key = binary.LittleEndian.Uint32(key)
+		cell.fields.indexInternal.childPage = binary.LittleEndian.Uint32(childPage)
+		cell.fields.indexInternal.keyPk = binary.LittleEndian.Uint32(keyPk)
+
+		return &cell, nil
 	case LeafIndex:
-		return nil, fmt.Errorf("not implemeted")
+		var cell BTreeCell
+
+		key := make([]byte, unsafe.Sizeof(cell.key))
+		keyPk := make([]byte, unsafe.Sizeof(cell.fields.indexLeaf.keyPk))
+		if _, err := buffer.Read(key); err != nil {
+			return nil, err
+		}
+		if _, err := buffer.Read(keyPk); err != nil {
+			return nil, err
+		}
+
+		cell.typ = n.typ
+		cell.key = binary.LittleEndian.Uint32(key)
+		cell.fields.indexLeaf.keyPk = binary.LittleEndian.Uint32(keyPk)
+
+		return &cell, nil
 	default:
 		return nil, fmt.Errorf("invalid node type %d", n.typ)
 	}
@@ -555,16 +605,23 @@ type BTreeCell struct {
 
 func (b *BTreeCell) Bytes() ([]byte, error) {
 	buffer := bytes.NewBuffer([]byte(""))
+	key := make([]byte, unsafe.Sizeof(b.key))
+	binary.LittleEndian.PutUint32(key, b.key)
 
 	switch b.typ {
 	case InternalTable:
-		return nil, fmt.Errorf("not implemented")
+		childPage := make([]byte, unsafe.Sizeof(b.fields.tableInternal.childPage))
+		binary.LittleEndian.PutUint32(childPage, b.fields.tableInternal.childPage)
+		buffer.Grow(len(childPage) + len(key))
+		if _, err := buffer.Write(childPage); err != nil {
+			return nil, err
+		}
+		if _, err := buffer.Write(key); err != nil {
+			return nil, err
+		}
 	case LeafTable:
 		size := make([]byte, unsafe.Sizeof(b.fields.tableLeaf.size))
-		key := make([]byte, unsafe.Sizeof(b.key))
 		binary.LittleEndian.PutUint32(size, b.fields.tableLeaf.size)
-		binary.LittleEndian.PutUint32(key, b.key)
-
 		buffer.Grow(len(size) + len(key) + len(b.fields.tableLeaf.data))
 		if _, err := buffer.Write(size); err != nil {
 			return nil, err
@@ -576,9 +633,30 @@ func (b *BTreeCell) Bytes() ([]byte, error) {
 			return nil, err
 		}
 	case InternalIndex:
-		return nil, fmt.Errorf("not implemented")
+		childPage := make([]byte, unsafe.Sizeof(b.fields.indexInternal.childPage))
+		keyPk := make([]byte, unsafe.Sizeof(b.fields.indexInternal.keyPk))
+		binary.LittleEndian.PutUint32(childPage, b.fields.indexInternal.childPage)
+		binary.LittleEndian.PutUint32(keyPk, b.fields.indexInternal.keyPk)
+		buffer.Grow(len(childPage) + len(key) + len(keyPk))
+		if _, err := buffer.Write(childPage); err != nil {
+			return nil, err
+		}
+		if _, err := buffer.Write(key); err != nil {
+			return nil, err
+		}
+		if _, err := buffer.Write(keyPk); err != nil {
+			return nil, err
+		}
 	case LeafIndex:
-		return nil, fmt.Errorf("not implemented")
+		keyPk := make([]byte, unsafe.Sizeof(b.fields.indexLeaf.keyPk))
+		binary.LittleEndian.PutUint32(keyPk, b.fields.indexLeaf.keyPk)
+		buffer.Grow(len(key) + len(keyPk))
+		if _, err := buffer.Write(key); err != nil {
+			return nil, err
+		}
+		if _, err := buffer.Write(keyPk); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("invalid cell type %d", b.typ)
 	}

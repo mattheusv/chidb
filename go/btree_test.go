@@ -8,7 +8,78 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestInsertCellGetCell(t *testing.T) {
+func TestInsertInternalIndexCellGetCell(t *testing.T) {
+	btree := openBtree(t)
+
+	node, err := btree.NewNode(InternalIndex)
+	require.Nil(t, err, "Expected nil errro to create new node")
+
+	cell := BTreeCell{
+		typ: node.typ,
+		key: 1,
+	}
+	cell.fields.indexInternal.childPage = 2
+	cell.fields.indexInternal.keyPk = 20
+
+	err = node.InsertCell(1, &cell)
+	require.Nil(t, err, "Expected nil error to insert cell")
+
+	insertedCell, err := node.GetCell(1)
+	require.Nil(t, err, "Expected nil error to get cell after write")
+
+	assert.Equal(t, cell.typ, insertedCell.typ, "Expected equal types after write and get")
+	assert.Equal(t, cell.key, insertedCell.key, "Expected equal keys after write and get")
+	assert.Equal(t, cell.fields.indexInternal.childPage, insertedCell.fields.indexInternal.childPage, "Expected equal child page after write and get")
+	assert.Equal(t, cell.fields.indexInternal.keyPk, insertedCell.fields.indexInternal.keyPk, "Expected equal key pk after write and get")
+}
+
+func TestInsertLeafIndexCellGetCell(t *testing.T) {
+	btree := openBtree(t)
+
+	node, err := btree.NewNode(LeafIndex)
+	require.Nil(t, err, "Expected nil errro to create new node")
+
+	cell := BTreeCell{
+		typ: node.typ,
+		key: 1,
+	}
+	cell.fields.indexLeaf.keyPk = 10
+
+	err = node.InsertCell(1, &cell)
+	require.Nil(t, err, "Expected nil error to insert cell")
+
+	insertedCell, err := node.GetCell(1)
+	require.Nil(t, err, "Expected nil error to get cell after write")
+
+	assert.Equal(t, cell.typ, insertedCell.typ, "Expected equal types after write and get")
+	assert.Equal(t, cell.key, insertedCell.key, "Expected equal keys after write and get")
+	assert.Equal(t, cell.fields.indexLeaf.keyPk, insertedCell.fields.indexLeaf.keyPk, "Expected equal key pk after write and get")
+}
+
+func TestInsertInternalTableCellGetCell(t *testing.T) {
+	btree := openBtree(t)
+
+	node, err := btree.NewNode(InternalTable)
+	require.Nil(t, err, "Expected nil errro to create new node")
+
+	cell := BTreeCell{
+		typ: node.typ,
+		key: 1,
+	}
+	cell.fields.tableInternal.childPage = 2
+
+	err = node.InsertCell(1, &cell)
+	require.Nil(t, err, "Expected nil error to insert cell")
+
+	insertedCell, err := node.GetCell(1)
+	require.Nil(t, err, "Expected nil error to get cell after write")
+
+	assert.Equal(t, cell.typ, insertedCell.typ, "Expected equal types after write and get")
+	assert.Equal(t, cell.key, insertedCell.key, "Expected equal keys after write and get")
+	assert.Equal(t, cell.fields.tableInternal.childPage, insertedCell.fields.tableInternal.childPage, "Expected equal child page after write and get")
+}
+
+func TestInsertLeafTableCellGetCell(t *testing.T) {
 	btree := openBtree(t)
 
 	node, err := btree.NewNode(LeafTable)
@@ -19,7 +90,7 @@ func TestInsertCellGetCell(t *testing.T) {
 		key: 1,
 	}
 	cell.fields.tableLeaf.data = []byte("Hello World")
-	cell.fields.tableLeaf.size = 11
+	cell.fields.tableLeaf.size = uint32(len(cell.fields.tableLeaf.data))
 
 	err = node.InsertCell(1, &cell)
 	require.Nil(t, err, "Expected nil error to insert cell")
