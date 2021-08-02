@@ -188,10 +188,19 @@ func (b *BTree) ReadHeader() (*BTreeHeader, error) {
 type BTreeNodeType byte
 
 const (
+	// InternalTable ⟨Key,ChildPage⟩, where ChildPage is the number of the page containing
+	// the entries with keys less than or equal to Key.
 	InternalTable BTreeNodeType = 0x05
-	LeafTable     BTreeNodeType = 0x0D
+
+	// LeafTable⟨Key,DBRecord⟩, where DBRecord is a database record and Key is its primary key.
+	LeafTable BTreeNodeType = 0x0D
+
+	// InternalIndex  ⟨KeyIdx,KeyPk,ChildPage⟩, where KeyIdx and KeyPk are defined as above, and ChildPage
+	// is the number of the page containing the entries with keys less than KeyIdx.
 	InternalIndex BTreeNodeType = 0x02
-	LeafIndex     BTreeNodeType = 0x0A
+
+	// LeafIndex ⟨KeyIdx,KeyPk⟩, where KeyIdx and KeyPk are k1 and k2, respectively, as defined earlier.
+	LeafIndex BTreeNodeType = 0x0A
 )
 
 // BTreeNodeTypeFromByte create a BTreeNodeType from a raw byte
@@ -329,9 +338,8 @@ func BTreeNodeFromPage(page *MemPage) (*BTreeNode, error) {
 // Reads the contents of a cell from a BTreeNode and stores them in a BTreeCell.
 // This involves the following:
 //  1. Find out the offset of the requested cell in cell offset array.
-//  2. Read the cell from the in-memory page, and parse its
-//     contents (refer to The chidb File Format document for
-//     the format of cells).
+//  2. Read the cell from the in-memory page, and parse its contents
+// (refer to The chidb File Format document for the format of cells).
 func (n *BTreeNode) GetCell(nCell uint16) (*BTreeCell, error) {
 	_, offset, found := n.getCellOffset(nCell)
 	if !found {
