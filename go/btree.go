@@ -9,6 +9,11 @@ import (
 	"unsafe"
 )
 
+type (
+	// ChidbKey represents the key of BTreeCell
+	ChidbKey uint32
+)
+
 const PageCacheSizeInitial = 20000
 
 var MagicBytes = []byte("SQLite format 3")
@@ -353,7 +358,7 @@ func (n *BTreeNode) GetCell(nCell uint16) (*BTreeCell, error) {
 		}
 
 		cell.typ = n.typ
-		cell.key = binary.LittleEndian.Uint32(key)
+		cell.key = ChidbKey(binary.LittleEndian.Uint32(key))
 		cell.fields.tableInternal.childPage = binary.LittleEndian.Uint32(childPage)
 
 		return &cell, nil
@@ -380,7 +385,7 @@ func (n *BTreeNode) GetCell(nCell uint16) (*BTreeCell, error) {
 		cell.typ = n.typ
 		cell.fields.tableLeaf.size = size
 		cell.fields.tableLeaf.data = data
-		cell.key = binary.LittleEndian.Uint32(key)
+		cell.key = ChidbKey(binary.LittleEndian.Uint32(key))
 
 		return &cell, nil
 	case InternalIndex:
@@ -400,7 +405,7 @@ func (n *BTreeNode) GetCell(nCell uint16) (*BTreeCell, error) {
 		}
 
 		cell.typ = n.typ
-		cell.key = binary.LittleEndian.Uint32(key)
+		cell.key = ChidbKey(binary.LittleEndian.Uint32(key))
 		cell.fields.indexInternal.childPage = binary.LittleEndian.Uint32(childPage)
 		cell.fields.indexInternal.keyPk = binary.LittleEndian.Uint32(keyPk)
 
@@ -418,7 +423,7 @@ func (n *BTreeNode) GetCell(nCell uint16) (*BTreeCell, error) {
 		}
 
 		cell.typ = n.typ
-		cell.key = binary.LittleEndian.Uint32(key)
+		cell.key = ChidbKey(binary.LittleEndian.Uint32(key))
 		cell.fields.indexLeaf.keyPk = binary.LittleEndian.Uint32(keyPk)
 
 		return &cell, nil
@@ -568,7 +573,7 @@ type BTreeCell struct {
 	typ BTreeNodeType
 
 	// Key of cell
-	key uint32
+	key ChidbKey
 
 	fields struct {
 		// Represents a table internal cell
@@ -606,7 +611,7 @@ type BTreeCell struct {
 func (b *BTreeCell) Bytes() ([]byte, error) {
 	buffer := bytes.NewBuffer([]byte(""))
 	key := make([]byte, unsafe.Sizeof(b.key))
-	binary.LittleEndian.PutUint32(key, b.key)
+	binary.LittleEndian.PutUint32(key, uint32(b.key))
 
 	switch b.typ {
 	case InternalTable:
