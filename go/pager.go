@@ -67,10 +67,10 @@ func (m *MemPage) WriteAt(data []byte, at uint16) error {
 	}
 
 	if uint16(buffer.Len()) != dataSize {
-		fmt.Printf("Buffer len: %d\n", buffer.Len())
-		fmt.Printf("Page len: %d\n", dataSize)
-		fmt.Println("-----------------------")
-		panic("something goes really wrong here")
+		panic(fmt.Sprintf(
+			"Something goes really wrong here\n\n\nBuffer len: %d\nPage len: %d\n\n\n",
+			buffer.Len(), dataSize,
+		))
 	}
 
 	newData := buffer.Bytes()
